@@ -5,8 +5,10 @@ import (
 	"regexp"
 	"strings"
 
+	nanoutil "github.com/hectorchu/gonano/util"
+	ethutil "github.com/sammy007/open-ethereum-pool/util"
+
 	"github.com/sammy007/open-ethereum-pool/rpc"
-	"github.com/sammy007/open-ethereum-pool/util"
 )
 
 // Allow only lowercase hexadecimal with 0x prefix
@@ -21,15 +23,30 @@ func (s *ProxyServer) handleLoginRPC(cs *Session, params []string, id string) (b
 	}
 
 	login := strings.ToLower(params[0])
-	if !util.IsValidHexAddress(login) {
-		return false, &ErrorReply{Code: -1, Message: "Invalid login"}
+
+	if strings.HasPrefix(login, "0x") {
+		if !ethutil.IsValidHexAddress(login) {
+			return false, &ErrorReply{Code: -1, Message: "Invalid Ethereum address provided"}
+		}
+	} else if strings.HasPrefix(login, "nano_") {
+		_, err := nanoutil.AddressToPubkey(login)
+
+		if err != nil {
+			return false, &ErrorReply{Code: -1, Message: "Invalid Nano address provided"}
+		}
+	} else {
+		return false, &ErrorReply{Code: -1, Message: "Unsupported address provided"}
 	}
+
 	if !s.policy.ApplyLoginPolicy(login, cs.ip) {
 		return false, &ErrorReply{Code: -1, Message: "You are blacklisted"}
 	}
+
 	cs.login = login
 	s.registerSession(cs)
+
 	log.Printf("Stratum miner connected %v@%v", login, cs.ip)
+
 	return true, nil
 }
 

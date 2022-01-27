@@ -346,6 +346,16 @@ func (r *RedisClient) GetBalance(login string) (int64, error) {
 	return cmd.Int64()
 }
 
+func (r *RedisClient) GetPending(login string) (int64, error) {
+	cmd := r.client.HGet(r.formatKey("miners", login), "pending")
+	if cmd.Err() == redis.Nil {
+		return 0, nil
+	} else if cmd.Err() != nil {
+		return 0, cmd.Err()
+	}
+	return cmd.Int64()
+}
+
 func (r *RedisClient) LockPayouts(login string, amount int64) error {
 	key := r.formatKey("payments", "lock")
 	result := r.client.SetNX(key, join(login, amount), 0).Val()

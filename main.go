@@ -17,9 +17,12 @@ import (
 	"github.com/sammy007/open-ethereum-pool/payouts"
 	"github.com/sammy007/open-ethereum-pool/proxy"
 	"github.com/sammy007/open-ethereum-pool/storage"
+
+	"github.com/sammy007/open-ethereum-pool/nano_payouts"
 )
 
 var cfg proxy.Config
+var Ncfg proxy.NanoConfig
 var backend *storage.RedisClient
 
 func startProxy() {
@@ -40,6 +43,12 @@ func startBlockUnlocker() {
 func startPayoutsProcessor() {
 	u := payouts.NewPayoutsProcessor(&cfg.Payouts, backend)
 	u.Start()
+}
+
+func startNanoPayoutsProcessor() {
+	u := nano_payouts.NewPayoutsProcessor(&Ncfg.Payouts, backend)
+	u.Start()
+	log.Printf("Starting Nano Payment")
 }
 
 func startNewrelic() {
@@ -66,13 +75,38 @@ func readConfig(cfg *proxy.Config) {
 	}
 	defer configFile.Close()
 	jsonParser := json.NewDecoder(configFile)
+
 	if err := jsonParser.Decode(&cfg); err != nil {
 		log.Fatal("Config error: ", err.Error())
 	}
+
+}
+
+func readNanoConfig(Ncfg *proxy.NanoConfig) {
+	configFileName := "config.json"
+	if len(os.Args) > 1 {
+		configFileName = os.Args[1]
+	}
+	configFileName, _ = filepath.Abs(configFileName)
+	log.Printf("Loading config: %v", configFileName)
+
+	configFile, err := os.Open(configFileName)
+	if err != nil {
+		log.Fatal("File error: ", err.Error())
+	}
+	defer configFile.Close()
+	jsonParser := json.NewDecoder(configFile)
+
+	if err := jsonParser.Decode(&Ncfg); err != nil {
+		log.Fatal("Config error: ", err.Error())
+	}
+
 }
 
 func main() {
 	readConfig(&cfg)
+	readNanoConfig(&Ncfg)
+
 	rand.Seed(time.Now().UnixNano())
 
 	if cfg.Threads > 0 {
@@ -101,6 +135,8 @@ func main() {
 	}
 	if cfg.Payouts.Enabled {
 		go startPayoutsProcessor()
+		go startNanoPayoutsProcessor()
+
 	}
 	quit := make(chan bool)
 	<-quit

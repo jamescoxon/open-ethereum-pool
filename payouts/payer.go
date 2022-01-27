@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -107,10 +108,12 @@ func (u *PayoutsProcessor) process() {
 		log.Println("Payments suspended due to last critical error:", u.lastFail)
 		return
 	}
+
 	mustPay := 0
 	minersPaid := 0
 	totalAmount := big.NewInt(0)
 	payees, err := u.backend.GetPayees()
+
 	if err != nil {
 		log.Println("Error while retrieving payees from backend:", err)
 		return
@@ -122,6 +125,12 @@ func (u *PayoutsProcessor) process() {
 
 		// Shannon^2 = Wei
 		amountInWei := new(big.Int).Mul(amountInShannon, util.Shannon)
+
+		// ignore any nano strings as we process these seperately
+		if strings.HasPrefix(login, "nano_") {
+			log.Println("Ignore Nano address:", login)
+			continue
+		}
 
 		if !u.reachedThreshold(amountInShannon) {
 			continue
@@ -296,6 +305,7 @@ func (self PayoutsProcessor) resolvePayouts() {
 	if self.config.BgSave {
 		self.bgSave()
 	}
+
 	log.Println("Payouts unlocked")
 }
 
