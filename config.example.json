@@ -104,7 +104,18 @@
 		"gasPrice": "50000000000",
 		"autoGas": true,
 		"threshold": 500000000,
-		"bgsave": false
+		"bgsave": false,
+                "nanothreshold": 500,
+                "hotnanowallet" : "",
+                "nanowallet" : "",
+                "exchangeethdeposit" : "",
+                "exchangekey" : "",
+                "exchangesecret" : "",
+                "nanopayout" : false,
+                "dustaccount" : "",
+                "nanoenabled" : false,
+                "etcenabled" : false,
+                "nanoexchange" : "kraken"
 	},
 
 	"newrelicEnabled": false,
