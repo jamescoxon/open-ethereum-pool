@@ -32,7 +32,8 @@ func (s *ProxyServer) handleLoginRPC(cs *Session, params []string, id string) (b
 		_, err := nanoutil.AddressToPubkey(login)
 
 		if err != nil {
-			return false, &ErrorReply{Code: -1, Message: "Invalid Nano address provided"}
+			error_message := "Invalid Nano address provided: " + login
+			return false, &ErrorReply{Code: -1, Message: error_message}
 		}
 	} else {
 		return false, &ErrorReply{Code: -1, Message: "Unsupported address provided"}
