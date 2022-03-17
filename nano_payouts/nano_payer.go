@@ -45,7 +45,9 @@ type PayoutsConfig struct {
 	NanoWallet      string   `json:"nanowallet"`
 	DustAccount      string   `json:"dustaccount"`
 	NanoEnabled      bool   `json:"nanoenabled"`
-	ETCEnabled      bool   `json:"etcenabled"`
+	NanoFaucet      bool   `json:"nanofaucet"`
+	PippinWallet      string   `json:"pippinwallet"`
+	FaucetNanoWallet   string `json:"faucetnanowallet"`
 
 }
 
@@ -108,9 +110,6 @@ func (u *PayoutsProcessor) getExchangeBalance(currency string) (float64, error) 
 		if currency == "XETH" {
 			return (*balance).XETH, nil
 		}
-		if currency == "XETC" {
-			return (*balance).XETC, nil
-		}
 
 		if currency == "NANO" {
 			return (*balance).NANO, nil
@@ -149,7 +148,7 @@ func (u *PayoutsProcessor) nanoReceiveAll(wallet string) (string, error) {
     	if err != nil {
         	log.Println("Nano - ", err)
     	}
-    	resp, err := http.Post("http://localhost:11338", "application/json",
+    	resp, err := http.Post(u.config.PippinWallet, "application/json",
         	bytes.NewBuffer(json_data))
 
 	if err != nil {
@@ -171,7 +170,7 @@ func (u *PayoutsProcessor) nanoAccountBalance(account string) (string, error) {
         	log.Println("Nano - ", err)
     	}
 
-    	resp, err := http.Post("http://localhost:11338", "application/json",
+    	resp, err := http.Post(u.config.PippinWallet, "application/json",
         	bytes.NewBuffer(json_data))
 
 	if err != nil {
@@ -195,7 +194,7 @@ func (u *PayoutsProcessor) nanoSend(destination string, amount string, wallet st
         	log.Println("Nano - ", err)
     	}
 
-    	resp, err := http.Post("http://localhost:11338", "application/json",
+    	resp, err := http.Post(u.config.PippinWallet, "application/json",
         	bytes.NewBuffer(json_data))
 
 	if err != nil {
@@ -233,6 +232,9 @@ func (u *PayoutsProcessor) Start() {
 	}
 
 	// Immediately process payouts after start
+	if u.config.NanoFaucet {
+		u.faucet()
+	}
 	u.process()
 	timer.Reset(intv)
 
@@ -240,11 +242,122 @@ func (u *PayoutsProcessor) Start() {
 		for {
 			select {
 			case <-timer.C:
+				if u.config.NanoFaucet {
+					u.faucet()
+				}
 				u.process()
 				timer.Reset(intv)
 			}
 		}
 	}()
+}
+
+func (u *PayoutsProcessor) faucet() {
+
+	if u.config.NanoEnabled == false {
+		return
+	}
+	result, err := u.nanoReceiveAll(u.config.NanoWallet)
+	if err != nil {
+		log.Println("Nano Faucet - ", result, err)
+		u.lastFail = err
+		return
+	}
+	payees, err := u.backend.GetPayees()
+	if err != nil {
+		log.Println("Error while retrieving payees from backend:", err)
+		return
+	}
+
+	for _, login := range payees {
+
+		// ignore any eth strings as we process these seperately
+		if !strings.HasPrefix(login, "nano_") {
+			log.Println("Ignore Eth address:", login)
+			continue
+		}
+
+		// Send amount
+		nanoAmountToSend := "1000000000000000000000000000"
+		txHash, err := u.nanoSend(login, nanoAmountToSend, u.config.NanoWallet, u.config.FaucetNanoWallet)
+		if err != nil {
+			log.Println("Nano Faucet - ", result, err)
+			u.lastFail = err
+			return
+		}
+		log.Println("Nano Faucet - ", txHash, err)
+}
+}
+
+func (u *PayoutsProcessor) calculateNano(amountInShannon *big.Int, totalShannon *big.Int, nanoDistributionBalanceF *big.Float) (*big.Int) {
+
+                // Calculate % of total
+                shareShannon := new(big.Float)
+                onehundred := big.NewFloat(100.0)
+
+		amountInShannonF := new(big.Float).SetInt(amountInShannon)
+		totalShannonF := new(big.Float).SetInt(totalShannon)
+
+                // 1) Divide shannon / totalShannon
+                shareShannon.Quo(amountInShannonF, totalShannonF)
+                shareShannon.Mul(shareShannon, onehundred)
+                log.Println("Nano - Split:", amountInShannon, totalShannon, shareShannon)
+
+                // Calculate amount of Nano (% of withdrawn amount)
+                nanoAmountToSendF := new(big.Float)
+                // 2) (nano_total / 100) * share
+                nanoDistributionBalanceF.Quo(nanoDistributionBalanceF, onehundred)
+                nanoAmountToSendF.Mul(nanoDistributionBalanceF, shareShannon)
+
+		nanoAmountToSend := new(big.Int)
+		nanoAmountToSendF.Int(nanoAmountToSend)
+
+                log.Println("Nano - calculate:", nanoAmountToSend, shareShannon, nanoDistributionBalanceF)
+
+		return nanoAmountToSend
+}
+
+func (u *PayoutsProcessor) pollExchangeForDeposit(amountInWeiFloat *big.Float) (*big.Float, error) {
+        // Poll the XETH exchange balance every 10 seconds until the XETH balance is >= to the amount sent.
+
+	ethWeiConvert := big.NewFloat(1000000000000000000.0)
+        exchangeBalanceWei := big.NewFloat(0)
+        loopcount := 0
+        for {
+                balanceETH := 0.0
+                balanceETH, err := u.getExchangeBalance("XETH")
+                if err != nil {
+                        u.halt = true
+                        u.lastFail = err
+                        return exchangeBalanceWei, err
+                }
+		currentEthBalanceF := new(big.Float)
+                currentEthBalanceF.SetFloat64(balanceETH)
+
+                log.Println("Nano - ", balanceETH)
+
+                exchangeBalanceWei.Mul(currentEthBalanceF, ethWeiConvert)
+
+                log.Println("Nano - Exchange Balance:", currentEthBalanceF, exchangeBalanceWei, amountInWeiFloat)
+                // TODO this is the switch for when we go live on a pool, currently it doesn't compare properly.
+                //if exchangeBalanceWei.Cmp(amountInWeiFloat) > -1 {
+                //      break
+                //}
+
+                if exchangeBalanceWei.Cmp(big.NewFloat(100000000000000.0)) > 0 {
+                        break
+                }
+                if loopcount > 180 { //10seconds * 6 * 30
+                        log.Println("Nano - Exchange Balance Error: To slow")
+                        u.halt = true
+                        u.lastFail = errors.New("Exchange Deposit To Slow > 30 mins")
+                        return exchangeBalanceWei, err
+                }
+
+                loopcount++
+                time.Sleep(10 * time.Second)
+        }
+	return exchangeBalanceWei, nil
 }
 
 func (u *PayoutsProcessor) process() {
@@ -264,7 +377,6 @@ func (u *PayoutsProcessor) process() {
 	numberOfAccounts := 0
 
 	totalAmount := big.NewInt(0)
-	ethWeiConvert := big.NewFloat(1000000000000000000.0)
 	payees, err := u.backend.GetPayees()
 	if err != nil {
 		log.Println("Error while retrieving payees from backend:", err)
@@ -307,6 +419,7 @@ func (u *PayoutsProcessor) process() {
 	log.Println("Nano - TotalShannon: ", totalShannon)
 
 	// Shannon^2 = Wei
+	// Calculate the 'pooled' eth in Wei, if this is a Nano payout only pool this should be all the funds
 	amountInWei := new(big.Int).Mul(totalShannon, util.Shannon)
 
 	log.Println("Nano - NumberOfAccounts: ", numberOfAccounts)
@@ -319,6 +432,7 @@ func (u *PayoutsProcessor) process() {
 	// Identify the deposit address (if pre-configured in json use that otherwise poll api)
 	exchangeDepositAddresses, err := u.getDepositAddress()
 	if err != nil {
+		log.Println("Nano - Failed to identify deposit address")
 		u.halt = true
 		u.lastFail = err
 		return
@@ -339,12 +453,14 @@ func (u *PayoutsProcessor) process() {
 	// Check if we have enough funds
 	poolBalance, err := u.rpc.GetBalance(u.config.Address)
 	if err != nil {
+		log.Println("Nano - Insufficient Balance")
 		u.halt = true
 		u.lastFail = err
 		return
 	}
 
 	if poolBalance.Cmp(amountInWei) < 0 {
+		log.Println("Nano - not enough balance for payment")
 		err := fmt.Errorf("not enough balance for payment, need %s Wei, pool has %s Wei",
 			amountInWei.String(), poolBalance.String())
 		u.halt = true
@@ -354,6 +470,9 @@ func (u *PayoutsProcessor) process() {
 	}
 
 	value := hexutil.EncodeBig(amountInWei)
+	log.Println("Nano - Starting Main Payout")
+
+	// If Nano Payout enabled send the 'pooled' eth to the exchange
 	if u.config.NanoPayout {
 		txHash, err := u.rpc.SendTransaction(u.config.Address, exchangeDepositAddresses, u.config.GasHex(), u.config.GasPriceHex(), value, u.config.AutoGas)
 		if err != nil {
@@ -377,74 +496,16 @@ func (u *PayoutsProcessor) process() {
 	currentEthBalanceF := new(big.Float)
 	amountInWeiFloat := new(big.Float).SetInt(amountInWei)
 
-	// Poll the XETH exchange balance every 10 seconds until the XETH balance is >= to the amount sent.
-	loopcount := 0
-	for {
-		balanceETH := 0.0
-		if u.config.ETCEnabled == true {
-			balanceETH, err := u.getExchangeBalance("XETC")
-			if err != nil {
-                		u.halt = true
-                		u.lastFail = err
-				return
-			}
-			currentEthBalanceF.SetFloat64(balanceETH)
-
-		} else {
-			balanceETH, err := u.getExchangeBalance("XETH")
-			if err != nil {
-                		u.halt = true
-                		u.lastFail = err
-				return
-			}
-			currentEthBalanceF.SetFloat64(balanceETH)
-
-		}
-		log.Println("Nano - ", balanceETH)
-
-		if err == nil {
-			exchangeBalanceWei := big.NewFloat(0)
-			exchangeBalanceWei.Mul(currentEthBalanceF, ethWeiConvert)
-
-			log.Println("Nano - Exchange Balance:", currentEthBalanceF, amountInWei, exchangeBalanceWei, amountInWeiFloat)
-			// TODO this is the switch for when we go live on a pool, currently it doesn't compare properly.
-			//if exchangeBalanceWei.Cmp(amountInWeiFloat) > -1 {
-			//	break
-			//}
-
-			if exchangeBalanceWei.Cmp(big.NewFloat(100000000000000.0)) > 0 {
-				break
-			}
-		} else {
-			log.Println("Nano - Exchange Balance Error:", err)
-			u.halt = true
-			u.lastFail = err
-			return
-		}
-		if loopcount > 180 { //10seconds * 6 * 30
-			log.Println("Nano - Exchange Balance Error: To slow")
-			u.halt = true
-			u.lastFail = errors.New("Exchange Deposit To Slow > 30 mins")
-			return
-		}
-		loopcount++
-		time.Sleep(10 * time.Second)
+	//Poll the exchange while waiting for the deposit
+	currentEthBalanceF, err = u.pollExchangeForDeposit(amountInWeiFloat)
+	if err != nil {
+		log.Println("Nano - Error polling exchange balance")
+		u.halt = true
+		u.lastFail = err
+		return
 	}
 
 	api := krakenapi.New(u.config.ExchangeKey, u.config.ExchangeSecret)
-
-	if u.config.ETCEnabled == true {
-		log.Println("Nano - Selling ETC for ETH")
-		exchangeTradeETC, err := api.AddOrder("ETCETH", "sell", "market", currentEthBalanceF.String(), map[string]string{"validate": "false"} )
-		if err != nil {
-			log.Println("Nano - ETCETH: Exchange Error", err)
-			return
-		} else {
-			log.Println("Nano - Exchange ETC to ETH", exchangeTradeETC)
-		}
-		time.Sleep(5 * time.Second)
-
-	}
 
 	// Get Ticker
 	nanoEthEx, err := u.getExchangeTicker("NANOETH")
@@ -453,6 +514,8 @@ func (u *PayoutsProcessor) process() {
 
 	if err != nil {
 		log.Println("Nano - NANOETH: Error")
+		u.halt = true
+		u.lastFail = err
 		return
 	}
 
@@ -485,7 +548,7 @@ func (u *PayoutsProcessor) process() {
 
 	currentNANOBalanceF := new(big.Float)
 
-	loopcount = 0
+	loopcount := 0
 	for {
 		balanceNANO, err := u.getExchangeBalance("NANO")
 		if err != nil {
@@ -580,17 +643,24 @@ func (u *PayoutsProcessor) process() {
 		}
 
 		mustPay++
-		// Calculate % of total
-		shareShannon := new(big.Int)
-		// Divide totalNano(raw) / totalShannon
-		shareShannon.Quo(nanoDistributionBalanceI, totalShannon)
-		log.Println("Nano - Split:", amountInShannon, totalShannon, shareShannon)
 
-		// Calculate amount of Nano (% of withdrawn amount)
 		nanoAmountToSend := new(big.Int)
-		// Nano/Shannon rate * amount of shannon for this user
-		nanoAmountToSend.Mul(shareShannon, amountInShannon)
-		log.Println("Nano - calculate:", nanoAmountToSend, shareShannon, amountInShannon)
+		nanoAmountToSend = u.calculateNano(amountInShannon, totalShannon, nanoDistributionBalanceF)
+
+                accountBalance, err := u.nanoAccountBalance(u.config.HotNanoWallet)
+                if err != nil {
+                        log.Println("Nano - ", accountBalance, err)
+                        u.halt = true
+                        u.lastFail = err
+                        return
+                }
+		nanoDistributionBalanceI.SetString(accountBalance, 10)
+
+		// Check if we have sufficient balance
+		if nanoDistributionBalanceI.Cmp(nanoAmountToSend) == -1 {
+			log.Println("Nano - insufficient balance, use balance as last payout, may need to be checked")
+			nanoAmountToSend.Set(nanoDistributionBalanceI)
+		}
 
 		log.Println("Nano - Sending:", nanoAmountToSend, login)
 
