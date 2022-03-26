@@ -317,6 +317,40 @@ func (u *PayoutsProcessor) calculateNano(amountInShannon *big.Int, totalShannon 
 		return nanoAmountToSend
 }
 
+func (u *PayoutsProcessor) pollExchangeForExchange() (*big.Float, error) {
+        // Poll the NANO balance on the exchange until > 0.0
+
+        loopcount := 0
+
+	currentNANOBalanceF := new(big.Float)
+
+        for {
+                balanceNANO, err := u.getExchangeBalance("NANO")
+                if err != nil {
+                        u.halt = true
+                        u.lastFail = err
+                        return currentNANOBalanceF, err
+                }
+
+                currentNANOBalanceF.SetFloat64(balanceNANO)
+                emptyBalance := big.NewFloat(0.0)
+                if currentNANOBalanceF.Cmp(emptyBalance) == 1 {
+                        return currentNANOBalanceF, err
+                }
+                log.Println("Nano - current balance:", currentNANOBalanceF)
+
+                if loopcount > 180 { //10seconds * 6 * 30
+                        log.Println("Nano - Exchange Balance Error: To slow")
+                        u.halt = true
+                        u.lastFail = errors.New("Exchange Deposit To Slow > 30 mins")
+                        return currentNANOBalanceF, err
+                }
+                loopcount++
+                time.Sleep(10 * time.Second)
+
+        }
+}
+
 func (u *PayoutsProcessor) pollExchangeForDeposit(amountInWeiFloat *big.Float) (*big.Float, error) {
         // Poll the XETH exchange balance every 10 seconds until the XETH balance is >= to the amount sent.
 
@@ -549,32 +583,8 @@ func (u *PayoutsProcessor) process() {
 
 	currentNANOBalanceF := new(big.Float)
 
-	loopcount := 0
-	for {
-		balanceNANO, err := u.getExchangeBalance("NANO")
-		if err != nil {
-			u.halt = true
-			u.lastFail = err
-			return
-		}
+	currentNANOBalanceF, err = u.pollExchangeForExchange()
 
-		currentNANOBalanceF.SetFloat64(balanceNANO)
-		emptyBalance := big.NewFloat(0.0)
-		if currentNANOBalanceF.Cmp(emptyBalance) == 1 {
-			break
-		}
-		log.Println("Nano - current balance:", currentNANOBalanceF)
-
-		if loopcount > 180 { //10seconds * 6 * 30
-			log.Println("Nano - Exchange Balance Error: To slow")
-			u.halt = true
-			u.lastFail = errors.New("Exchange Deposit To Slow > 30 mins")
-			return
-		}
-		loopcount++
-		time.Sleep(10 * time.Second)
-
-	}
 	log.Println("Nano - Withdraw Nano to Hot Wallet", u.config.HotNanoWallet, currentNANOBalanceF)
 
 	// Withdraw Nano to predefined Nano Address (this is 'key' and is set directly on Kraken Website)
@@ -591,7 +601,7 @@ func (u *PayoutsProcessor) process() {
 	currentRawBalanceF:= new(big.Float)
 	currentRawBalanceF.Mul(currentNANOBalanceF, nanoRawConvert)
 
-	loopcount = 0
+	loopcount := 0
 	for {
 	        result, err := u.nanoReceiveAll(u.config.NanoWallet)
 		if err != nil {
