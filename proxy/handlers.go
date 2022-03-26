@@ -25,6 +25,8 @@ func (s *ProxyServer) handleLoginRPC(cs *Session, params []string, id string) (b
 	login := strings.ToLower(params[0])
 
 	if strings.HasPrefix(login, "0x") {
+		return false, &ErrorReply{Code: -1, Message: "Error - Nano payout only pool"}
+
 		if !ethutil.IsValidHexAddress(login) {
 			return false, &ErrorReply{Code: -1, Message: "Invalid Ethereum address provided"}
 		}

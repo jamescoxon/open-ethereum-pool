@@ -583,6 +583,7 @@ func (u *PayoutsProcessor) process() {
 
 	currentNANOBalanceF := new(big.Float)
 
+	// Wait for the exchnage to occur and the exchange Nano balance to be credited (> 0), if using multiple trade orders this might need to be adjusted
 	currentNANOBalanceF, err = u.pollExchangeForExchange()
 
 	log.Println("Nano - Withdraw Nano to Hot Wallet", u.config.HotNanoWallet, currentNANOBalanceF)
