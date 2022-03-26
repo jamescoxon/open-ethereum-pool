@@ -372,6 +372,7 @@ func (u *PayoutsProcessor) process() {
 
 	mustPay := 0
 	minersPaid := 0
+	nanoRawConvert := big.NewFloat(1000000000000000000000000000000.0)
 
 	totalShannon := big.NewInt(0)
 	numberOfAccounts := 0
@@ -587,6 +588,8 @@ func (u *PayoutsProcessor) process() {
 
 	nanoDistributionBalanceI := new(big.Int)
 	nanoDistributionBalanceF := new(big.Float)
+	currentRawBalanceF:= new(big.Float)
+	currentRawBalanceF.Mul(currentNANOBalanceF, nanoRawConvert)
 
 	loopcount = 0
 	for {
@@ -609,7 +612,7 @@ func (u *PayoutsProcessor) process() {
 		nanoDistributionBalanceI.SetString(balance, 10)
 		nanoDistributionBalanceF.SetInt(nanoDistributionBalanceI)
 
-		if nanoDistributionBalanceF.Cmp(currentNANOBalanceF) >= 0 {
+		if nanoDistributionBalanceF.Cmp(currentRawBalanceF) >= 0 {
 			break
 		}
 
